@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+    cursor: none;
+    font-family: 'Comic Sans MS', cursive;
+  }
+  canvas { display: block; }
+  #startBtn {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #e8553a;
+    color: white;
+    border: none;
+    border-radius: 50px;
+    padding: 18px 38px;
+    font-size: 20px;
+    font-family: 'Comic Sans MS', cursive;
+    cursor: pointer;
+    box-shadow: 4px 4px 0 #8a2010;
+    z-index: 10;
+  }
+  #hitLabel {
+    position: fixed;
+    top: 12px; left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    font-size: 18px;
+    font-family: 'Comic Sans MS', cursive;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+    text-shadow: 0 0 10px #f5c842;
+    z-index: 5;
+  }
+</style>
+</head>
+<body>
+<button id="startBtn">🥁 Tap to Play!</button>
+<div id="hitLabel"></div>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width = 480;
+const H = canvas.height = 600;
+let audioCtx, started = false;
+let labelTimer = null;
+
+// ── Audio Engine ──────────────────────────────────────────────
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function out(node, gain = 1) {
+  const g = audioCtx.createGain(); g.gain.value = gain;
+  node.connect(g); g.connect(audioCtx.destination); return g;
+}
+
+function playKick() {
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(160, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(1.2, t);
+  env.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+  o.connect(env); out(env, 1.4);
+  o.start(t); o.stop(t + 0.5);
+  // click layer
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.02, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 3);
+  const ns = audioCtx.createBufferSource(); ns.buffer = buf;
+  const ng = audioCtx.createGain(); ng.gain.value = 0.6;
+  ns.connect(ng); ng.connect(audioCtx.destination);
+  ns.start(t);
+}
+
+function playSnare() {
+  const t = audioCtx.currentTime;
+  // tone
+  const o = audioCtx.createOscillator(); o.type = 'triangle'; o.frequency.value = 185;
+  const te = audioCtx.createGain();
+  te.gain.setValueAtTime(0.6, t); te.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  o.connect(te); out(te, 1);
+  o.start(t); o.stop(t + 0.2);
+  // noise snare
+  const len = audioCtx.sampleRate * 0.22;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const ns = audioCtx.createBufferSource(); ns.buffer = buf;
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1800;
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0.9, t); env.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+  ns.connect(hp); hp.connect(env); out(env, 1.1);
+  ns.start(t);
+}
+
+function playHihat(open = false) {
+  const t = audioCtx.currentTime;
+  const dur = open ? 0.35 : 0.08;
+  const len = Math.ceil(audioCtx.sampleRate * dur);
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const ns = audioCtx.createBufferSource(); ns.buffer = buf;
+  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 8000; bp.Q.value = 0.5;
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0.6, t); env.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  ns.connect(bp); bp.connect(hp); hp.connect(env); out(env, 0.7);
+  ns.start(t);
+}
+
+function playCrash() {
+  const t = audioCtx.currentTime;
+  const len = audioCtx.sampleRate * 1.2;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const ns = audioCtx.createBufferSource(); ns.buffer = buf;
+  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 5500; bp.Q.value = 0.3;
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3000;
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0.9, t); env.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+  const rev = audioCtx.createConvolver();
+  const rb = audioCtx.createBuffer(2, audioCtx.sampleRate*1.5, audioCtx.sampleRate);
+  for(let ch=0;ch<2;ch++){const rd=rb.getChannelData(ch);for(let i=0;i<rd.length;i++)rd[i]=(Math.random()*2-1)*Math.pow(1-i/rd.length,1.5);}
+  rev.buffer = rb;
+  ns.connect(bp); bp.connect(hp); hp.connect(env); env.connect(rev); out(rev, 0.8); out(env, 0.5);
+  ns.start(t);
+}
+
+function playTom(freq = 120) {
+  const t = audioCtx.currentTime;
+  const o = audioCtx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(freq * 1.4, t);
+  o.frequency.exponentialRampToValueAtTime(freq * 0.6, t + 0.12);
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0.9, t); env.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  // noise attack
+  const nb = audioCtx.createBuffer(1, audioCtx.sampleRate*0.03, audioCtx.sampleRate);
+  const nd = nb.getChannelData(0); for(let i=0;i<nd.length;i++) nd[i]=Math.random()*2-1;
+  const ns = audioCtx.createBufferSource(); ns.buffer=nb;
+  const ng = audioCtx.createGain(); ng.gain.setValueAtTime(0.4,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.03);
+  o.connect(env); ns.connect(ng); out(env,1); out(ng,0.5);
+  o.start(t); o.stop(t+0.4); ns.start(t);
+}
+
+function playRide() {
+  const t = audioCtx.currentTime;
+  const len = audioCtx.sampleRate * 0.6;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const ns = audioCtx.createBufferSource(); ns.buffer = buf;
+  const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3500; bp.Q.value = 1.2;
+  const env = audioCtx.createGain();
+  env.gain.setValueAtTime(0.5, t); env.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+  ns.connect(bp); bp.connect(env); out(env, 0.6);
+  ns.start(t);
+}
+
+// ── Drum Pad Definitions ──────────────────────────────────────
+const drums = [
+  // Cymbals row
+  { id:'crash',  label:'CRASH',    x:80,  y:90,  rx:58, ry:14, color:'#f5c842', stroke:'#c09010', play:playCrash,      shape:'cymbal' },
+  { id:'hihat',  label:'HI-HAT',   x:200, y:75,  rx:52, ry:13, color:'#a8d848', stroke:'#608010', play:()=>playHihat(false), shape:'cymbal' },
+  { id:'ride',   label:'RIDE',     x:320, y:90,  rx:58, ry:14, color:'#6ab4e8', stroke:'#2060a0', play:playRide,       shape:'cymbal' },
+  // Toms row
+  { id:'tom1',   label:'TOM 1',    x:120, y:185, rx:52, ry:44, color:'#e868a0', stroke:'#902050', play:()=>playTom(180), shape:'drum' },
+  { id:'tom2',   label:'TOM 2',    x:240, y:190, rx:52, ry:44, color:'#c87af0', stroke:'#703090', play:()=>playTom(140), shape:'drum' },
+  { id:'ftom',   label:'FLOOR TOM',x:370, y:300, rx:52, ry:44, color:'#ff8c42', stroke:'#b04010', play:()=>playTom(95),  shape:'drum' },
+  // Snare
+  { id:'snare',  label:'SNARE',    x:148, y:310, rx:58, ry:46, color:'#e8e8e8', stroke:'#888888', play:playSnare,      shape:'drum' },
+  // Kick (big)
+  { id:'kick',   label:'KICK',     x:255, y:430, rx:90, ry:72, color:'#e8553a', stroke:'#901010', play:playKick,       shape:'drum' },
+  // Open hihat
+  { id:'ohat',   label:'OPEN HAT', x:68,  y:300, rx:44, ry:36, color:'#ffd700', stroke:'#a08000', play:()=>playHihat(true), shape:'drum' },
+];
+
+// ── Particle System ───────────────────────────────────────────
+let particles = [];
+const crayonColors = ['#e8553a','#f5c842','#6ab4e8','#a8d848','#e868a0','#c87af0','#ff8c42','#ffd700','#50c878'];
+
+class Particle {
+  constructor(x, y, color) {
+    this.x = x; this.y = y; this.color = color;
+    this.vx = (Math.random()-0.5)*9;
+    this.vy = (Math.random()-0.5)*9 - 3;
+    this.life = 1.0;
+    this.decay = 0.018 + Math.random()*0.03;
+    this.size = 5 + Math.random()*10;
+    this.rotation = Math.random()*Math.PI*2;
+    this.rotSpeed = (Math.random()-0.5)*0.25;
+    this.type = Math.random()>0.45 ? 'stroke' : 'dot';
+    this.len = 10 + Math.random()*22;
+    this.gravity = 0.18 + Math.random()*0.12;
+  }
+  update() {
+    this.vx *= 0.97; this.vy += this.gravity;
+    this.x += this.vx; this.y += this.vy;
+    this.life -= this.decay; this.rotation += this.rotSpeed;
+  }
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = this.life * 0.92;
+    ctx.translate(this.x, this.y); ctx.rotate(this.rotation);
+    if (this.type === 'stroke') {
+      ctx.strokeStyle = this.color; ctx.lineWidth = this.size*0.45; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(-this.len/2, 0);
+      for (let i=0;i<=7;i++) ctx.lineTo(-this.len/2+(this.len/7)*i, (Math.random()-0.5)*2.5);
+      ctx.stroke();
+      ctx.globalAlpha = this.life*0.25; ctx.lineWidth = this.size*0.9; ctx.stroke();
+    } else {
+      ctx.fillStyle = this.color;
+      ctx.beginPath(); ctx.ellipse(0,0,this.size*0.85,this.size*0.5,0,0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+function spawnBurst(x, y, color, count=28) {
+  for (let i=0;i<count;i++) particles.push(new Particle(x,y,color));
+  // extra white sparkles
+  for (let i=0;i<6;i++) {
+    const p = new Particle(x,y,'#ffffff');
+    p.size = 2+Math.random()*4; p.decay=0.04; particles.push(p);
+  }
+}
+
+// ── Hit States ────────────────────────────────────────────────
+let hitStates = {};
+drums.forEach(d => hitStates[d.id] = { hit: false, scale: 1, t: 0 });
+
+function triggerDrum(drum) {
+  if (!started) return;
+  drum.play();
+  hitStates[drum.id].hit = true;
+  hitStates[drum.id].t = Date.now();
+  spawnBurst(drum.x, drum.y, drum.color);
+  showLabel(drum.label);
+}
+
+function showLabel(txt) {
+  const el = document.getElementById('hitLabel');
+  el.textContent = txt;
+  el.style.opacity = '1';
+  clearTimeout(labelTimer);
+  labelTimer = setTimeout(() => el.style.opacity='0', 600);
+}
+
+// ── Draw Functions ────────────────────────────────────────────
+function drawBg() {
+  // Dark stage background
+  const grad = ctx.createRadialGradient(W/2,H/2,60,W/2,H/2,320);
+  grad.addColorStop(0,'#2a2a4a'); grad.addColorStop(1,'#0d0d1a');
+  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+  // Subtle grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth=1;
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+}
+
+function drawCymbalStand(x, y) {
+  ctx.strokeStyle = '#666'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y+14); ctx.lineTo(x, y+80); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x-18, y+80); ctx.lineTo(x+18, y+80); ctx.stroke();
+}
+
+function drawDrumStand(x, y, ry) {
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y+ry); ctx.lineTo(x-18, y+ry+55); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, y+ry); ctx.lineTo(x+18, y+ry+55); ctx.stroke();
+}
+
+function drawKickPedal(x, y, ry) {
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(x-20, y+ry); ctx.lineTo(x-20, y+ry+45); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x+20, y+ry); ctx.lineTo(x+20, y+ry+45); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x-28, y+ry+45); ctx.lineTo(x+28, y+ry+45); ctx.stroke();
+}
+
+function crayonEllipse(x, y, rx, ry, fill, stroke, lw=3) {
+  // Crayon texture: multiple slightly offset strokes
+  for (let i=0;i<3;i++) {
+    const ox = (Math.random()-0.5)*1.5, oy=(Math.random()-0.5)*1.5;
+    ctx.beginPath(); ctx.ellipse(x+ox,y+oy,rx,ry,0,0,Math.PI*2);
+    ctx.strokeStyle=stroke; ctx.lineWidth=lw+i*0.5; ctx.globalAlpha=0.15+i*0.1; ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+  ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);
+  ctx.fillStyle=fill; ctx.fill();
+  ctx.strokeStyle=stroke; ctx.lineWidth=lw; ctx.stroke();
+}
+
+function drawDrum(d) {
+  const hs = hitStates[d.id];
+  const age = (Date.now() - hs.t) / 1000;
+  const hitAnim = hs.hit ? Math.max(0, 1 - age*5) : 0;
+  const scaleAmt = 1 + hitAnim * 0.1;
+
+  ctx.save();
+  ctx.translate(d.x, d.y);
+  ctx.scale(scaleAmt, scaleAmt);
+  ctx.translate(-d.x, -d.y);
+
+  // Glow on hit
+  if (hitAnim > 0) {
+    ctx.save();
+    ctx.shadowColor = d.color; ctx.shadowBlur = 30 * hitAnim;
+    ctx.beginPath(); ctx.ellipse(d.x,d.y,d.rx,d.ry,0,0,Math.PI*2);
+    ctx.fillStyle=d.color; ctx.globalAlpha=hitAnim*0.35; ctx.fill();
+    ctx.restore();
+  }
+
+  if (d.shape === 'cymbal') {
+    drawCymbalStand(d.x, d.y);
+    // Cymbal shape
+    ctx.save();
+    ctx.scale(1, 0.22);
+    crayonEllipse(d.x, d.y/0.22, d.rx, d.rx, d.color, d.stroke, 3);
+    // Dome
+    ctx.beginPath(); ctx.ellipse(d.x, d.y/0.22, d.rx*0.18, d.rx*0.18, 0,0,Math.PI*2);
+    ctx.fillStyle=d.stroke; ctx.fill();
+    ctx.restore();
+    // Edge highlight
+    ctx.beginPath(); ctx.ellipse(d.x, d.y, d.rx, d.ry, 0,0,Math.PI*2);
+    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=2; ctx.stroke();
+  } else {
+    if (d.id === 'kick') drawKickPedal(d.x,d.y,d.ry);
+    else if (d.id !== 'snare') drawDrumStand(d.x,d.y,d.ry);
+
+    // Drum shell
+    ctx.beginPath(); ctx.ellipse(d.x, d.y+d.ry*0.25, d.rx*0.96, d.ry*0.55, 0,0,Math.PI*2);
+    const sideColor = shadeColor(d.color, -40);
+    ctx.fillStyle = sideColor; ctx.fill();
+    ctx.strokeStyle = d.stroke; ctx.lineWidth=2; ctx.stroke();
+
+    // Top head
+    crayonEllipse(d.x, d.y, d.rx, d.ry*0.45, d.color, d.stroke, 3);
+
+    // Drum rim
+    ctx.beginPath(); ctx.ellipse(d.x,d.y,d.rx,d.ry*0.45,0,0,Math.PI*2);
+    ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=2.5; ctx.stroke();
+
+    // Lug bolts
+    const lugs = d.id==='kick'?8:6;
+    for(let i=0;i<lugs;i++){
+      const a=(Math.PI*2/lugs)*i;
+      const lx=d.x+Math.cos(a)*(d.rx+5), ly=d.y+Math.sin(a)*(d.ry*0.45+4);
+      ctx.beginPath(); ctx.arc(lx,ly,3,0,Math.PI*2);
+      ctx.fillStyle='#aaa'; ctx.fill();
+      ctx.strokeStyle='#666'; ctx.lineWidth=1; ctx.stroke();
+    }
+
+    // Crayon shading
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(d.x,d.y,d.rx,d.ry*0.45,0,0,Math.PI*2); ctx.clip();
+    ctx.globalAlpha=0.18; ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.ellipse(d.x+d.rx*0.25,d.y+d.ry*0.1,d.rx*0.6,d.ry*0.25,0,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=0.22; ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.ellipse(d.x-d.rx*0.3,d.y-d.ry*0.15,d.rx*0.3,d.ry*0.12,-0.4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Label
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.font='bold 10px Comic Sans MS, cursive';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(d.label, d.x+1, d.y+1);
+  ctx.fillStyle='#fff';
+  ctx.fillText(d.label, d.x, d.y);
+
+  ctx.restore();
+  if (age > 0.2) hs.hit = false;
+}
+
+function shadeColor(col, amt) {
+  let r=parseInt(col.slice(1,3),16), g=parseInt(col.slice(3,5),16), b=parseInt(col.slice(5,7),16);
+  r=Math.max(0,Math.min(255,r+amt));
+  g=Math.max(0,Math.min(255,g+amt));
+  b=Math.max(0,Math.min(255,b+amt));
+  return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+// ── Cursor ────────────────────────────────────────────────────
+let mouse = {x:-999,y:-999};
+const drumstickColors = ['#f5c842','#e8553a','#6ab4e8','#a8d848','#e868a0','#c87af0'];
+
+function drawCursor(x, y) {
+  ctx.save();
+  const ci = Math.floor(Date.now()/400) % drumstickColors.length;
+  // Drumstick shaft
+  ctx.strokeStyle = '#c8a04a'; ctx.lineWidth = 5; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x-18,y+18); ctx.lineTo(x+8,y-8); ctx.stroke();
+  // Tip bead
+  ctx.fillStyle = drumstickColors[ci];
+  ctx.beginPath(); ctx.arc(x+10,y-10,7,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.restore();
+}
+
+// ── Hit Detection ─────────────────────────────────────────────
+const lastHit = {};
+function checkHit(x, y) {
+  if (!started) return;
+  const now = Date.now();
+  drums.forEach(d => {
+    const dx = (x-d.x)/d.rx, dy = (y-d.y)/(d.shape==='cymbal'?d.ry:d.ry*0.45);
+    if (dx*dx+dy*dy <= 1) {
+      if (!lastHit[d.id] || now - lastHit[d.id] > 120) {
+        lastHit[d.id] = now;
+        triggerDrum(d);
+      }
+    }
+  });
+}
+
+// ── Main Loop ─────────────────────────────────────────────────
+function loop() {
+  drawBg();
+  drums.forEach(d => drawDrum(d));
+  particles = particles.filter(p => p.life > 0);
+  particles.forEach(p => { p.update(); p.draw(); });
+  drawCursor(mouse.x, mouse.y);
+  requestAnimationFrame(loop);
+}
+
+// ── Input ──────────────────────────────────────────────────────
+function getPos(e) {
+  const r = canvas.getBoundingClientRect();
+  const sx=W/r.width, sy=H/r.height;
+  const cx=e.touches?e.touches[0].clientX:e.clientX;
+  const cy=e.touches?e.touches[0].clientY:e.clientY;
+  return {x:(cx-r.left)*sx, y:(cy-r.top)*sy};
+}
+canvas.addEventListener('mousemove', e => { const p=getPos(e); mouse=p; checkHit(p.x,p.y); });
+canvas.addEventListener('click', e => { const p=getPos(e); checkHit(p.x,p.y); });
+canvas.addEventListener('touchmove', e => { e.preventDefault(); const p=getPos(e); mouse=p; checkHit(p.x,p.y); }, {passive:false});
+canvas.addEventListener('touchstart', e => { e.preventDefault(); const p=getPos(e); mouse=p; checkHit(p.x,p.y); }, {passive:false});
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  initAudio(); started=true;
+  document.getElementById('startBtn').style.display='none';
+});
+
+function resize() {
+  const s=Math.min(window.innerWidth, window.innerHeight*0.97, 560);
+  canvas.style.width=s*(W/H)+'px'; canvas.style.height=s+'px';
+}
+resize(); window.addEventListener('resize', resize);
+loop();
+</script>
+</body>
+</html>
